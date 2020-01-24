@@ -156,6 +156,7 @@ function do_start {
         socat \
             "exec:\"ssh -oUserKnownHostsFile=$host_file -p $HOST_PORT -S none root@$host_ip socat UNIX-LISTEN:/mnt/keychain/keychain.sock,unlink-early,unlink-close,fork -\"" \
             "exec:\"$0 keychain-lookup\"" &> /dev/null &
+        echo
     fi |& tee -a $PIDFILE
 
     # here, we're just printing the SSH keys that have been forwarded
@@ -217,10 +218,39 @@ function do_stop {
 }
 
 function do_mount {
-    echo -n "-v daft-ssh:/mnt/ssh "
-    echo -n "-e SSH_AUTH_SOCK=/mnt/ssh/ssh-agent.sock "
-    echo -n "-v daft-gpg:/root/.gnupg "
-    echo -n "-v daft-keychain:/keychain "
+    local opt_ssh=yes opt_gpg=yes opt_keychain=yes OPTIND
+    while getopts -- "-:" OPT; do
+        if [ "$OPT" = "-" ]; then
+            OPT="${OPTARG%%=*}"
+            OPTARG="${OPTARG#$OPT}"
+            OPTARG="${OPTARG#=}"
+        fi
+        case "$OPT" in
+            no-ssh) opt_ssh=no ;;
+            no-gpg) opt_gpg=no ;;
+            no-keychain) opt_keychain=no ;;
+            *) usage; exit 1 ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    if [ "$opt_ssh" = "no" ] &&
+       [ "$opt_gpg" = "no" ] &&
+       [ "$opt_keychain" = "no" ]; then
+        echo "Must enable one of ssh, gpg, or keychain"
+        exit 1
+    fi
+
+    if [ "$opt_ssh" = "yes" ]; then
+        echo -n "-v daft-ssh:/mnt/ssh "
+        echo -n "-e SSH_AUTH_SOCK=/mnt/ssh/ssh-agent.sock "
+    fi
+    if [ "$opt_gpg" = "yes" ]; then
+        echo -n "-v daft-gpg:/root/.gnupg "
+    fi
+    if [ "$opt_keychain" = "yes" ]; then
+        echo -n "-v daft-keychain:/keychain "
+    fi
 }
 
 function do_status {
