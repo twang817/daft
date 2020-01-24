@@ -151,7 +151,7 @@ Options:
 Daft can be started with options to disable ssh (`--no-ssh`), gpg (`--no-gpg`), or keychain (`--no-keychain`) forwarding.
 
 ```
-$ daft --no-ssh
+$ daft --no-ssh start
 ```
 
 Similarly, you can choose whether or not to mount SSH into your container when you start it:
