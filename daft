@@ -1,0 +1,271 @@
+#!/usr/bin/env bash
+
+set -eo pipefail
+
+SCRIPT_DIR=$(dirname $(readlink -f "$0"))
+VERSION=$(cat $SCRIPT_DIR/version)
+PIDFILE=~/.daft.pid
+
+IMAGE_NAME=${IMAGE_NAME:-daft}
+IMAGE_TAG=${IMAGE_TAG:-$VERSION}
+CONTAINER_NAME=${CONTAINER_NAME:-$IMAGE_NAME}
+HOST_PORT=${HOST_PORT:-2244}
+KEYCHAIN_ALLOWED=${KEYCHAIN_ALLOWED:-}
+KEYCHAIN_SERVICE=${KEYCHAIN_SERVICE:-}
+
+trap finish EXIT
+
+function finish {
+    for i in "${cleanup[@]}"; do
+        eval $i
+    done
+}
+
+function add_cleanup {
+    local quiet=no OPTIND
+    while getopts "q" OPT; do
+        case $OPT in
+            q) quiet=yes ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    local n=${cleanup[*]}
+    if [ "$quiet" = "yes" ]; then
+        cleanup[$n]="$* &> /dev/null"
+    else
+        cleanup[$n]="$*"
+    fi
+}
+
+function usage {
+    echo Usage: daft [command]
+}
+
+function _ensure_build {
+    if ! docker image inspect $IMAGE_NAME:$IMAGE_TAG &> /dev/null; then
+        do_build
+    fi
+    local image_date=$(docker image inspect -f {{.Created}} $IMAGE_NAME:$IMAGE_TAG)
+    local image_date_ts=$(date -d "$image_date" +%s)
+    local compare_date_ts=$(date -d "now - 30 days" +%s)
+    if [ "$image_date_ts" -lt "$compare_date_ts" ]; then
+        echo "WARNING: daft image is old, consider a rebuild to ensure it still works"
+    fi
+}
+
+function do_build {
+    docker build -t $IMAGE_NAME:$IMAGE_TAG .
+}
+
+function do_start {
+    local opt_ssh=yes opt_gpg=yes opt_keychain=yes OPTIND
+
+    if [ -z "$KEYCHAIN_SERVICE" ] || [ -z "$KEYCHAIN_ALLOWED" ]; then
+        opt_keychain=no
+    fi
+
+    while getopts -- "-:" OPT; do
+        if [ "$OPT" = "-" ]; then
+            OPT="${OPTARG%%=*}"
+            OPTARG="${OPTARG#$OPT}"
+            OPTARG="${OPTARG#=}"
+        fi
+        case "$OPT" in
+            no-ssh) opt_ssh=no ;;
+            no-gpg) opt_gpg=no ;;
+            no-keychain) opt_keychain=no ;;
+            *) usage; exit 1 ;;
+        esac
+    done
+    shift $((OPTIND - 1))
+
+    if [ "$opt_ssh" = "no" ] &&
+       [ "$opt_gpg" = "no" ] &&
+       [ "$opt_keychain" = "no" ]; then
+        echo "Must enable one of ssh, gpg, or keychain"
+        exit 1
+    fi
+
+    _ensure_build
+
+    local id=$(docker ps -qf name=$CONTAINER_NAME)
+    if [ -n "$id" ]; then
+        return
+    fi
+
+    {
+        echo "Forward SSH Agent:     $opt_ssh"
+        echo "Forward GPG Agent:     $opt_gpg"
+        echo "Create Keychain Proxy: $opt_keychain"
+        echo
+    } | tee $PIDFILE
+
+    [ "$opt_ssh" = "yes" ] && docker volume create daft-ssh &> /dev/null
+    [ "$opt_gpg" = "yes" ] && docker volume create daft-gpg &> /dev/null
+    [ "$opt_keychain" = "yes" ] && docker volume create daft-keychain &> /dev/null
+
+    docker run \
+        --name $CONTAINER_NAME \
+        --rm \
+        -d \
+        $(test "$opt_ssh" = "yes" && echo "-v daft-ssh:/mnt/ssh") \
+        $(test "$opt_gpg" = "yes" && echo "-v daft-gpg:/mnt/gpg") \
+        $(test "$opt_keychain" = "yes" && echo "-v daft-keychain:/mnt/keychain") \
+        -e AUTHORIZED_KEYS=$(ssh-add -L | base64 | tr -d '\n') \
+        -p $HOST_PORT:22 \
+        $IMAGE_NAME:$IMAGE_TAG > /dev/null
+
+    local host_ip
+    if [ "$DOCKER_HOST" ]; then
+        host_ip=$(echo $DOCKER_HOST | aws -F '//' '{print $2}' | awk -F ':' '{print $1}')
+    else
+        host_ip=127.0.0.1
+    fi
+
+    sleep 1
+    while ! nc -z -w5 $host_ip $HOST_PORT &> /dev/null; do
+        sleep 0.1
+    done
+
+    local host_file=$(mktemp -t daft.XXXX)
+    add_cleanup -q rm $host_file
+    ssh-keyscan -p $HOST_PORT $host_ip > $host_file 2> /dev/null
+
+    # diagram:
+    # client <-> /mnt/keychain/keychain.sock <-> ssh <-> xargs -n1 -- /usr/bin/security
+    #
+    # example:
+    #
+    # suppose a client inside the docker container writes a string "myaccount" to the /mnt/keychain/keychain.sock unix socket
+    # this can be performed with the following command:
+    #
+    # echo myaccount | socat UNIX-CONNECT:/mnt/keychain/keychain.sock -
+    #
+    # here's what happens:
+    # 1. the inner socat is listening on /mnt/keychain/keychain.sock
+    # 2. it forks and read the string "myaccount"
+    # 3. then transfers it to stdout
+    # 4. stdout is attached to the ssh session and is sent back to the host
+    # 5. the outer socat reads the string from the ssh connection and transfers it to the xargs command
+    # 6. xargs reads the string from its stdin and runs security, which fetches the password associated with myaccount for the given service
+    # 7. we tranverse the chain backward and ultimately deliver the password to the client
+    if [ "$opt_keychain" = "yes" ]; then
+        echo "Keychain Service: $KEYCHAIN_SERVICE"
+        echo "Keychain Account: $KEYCHAIN_ALLOWED"
+        socat \
+            "exec:\"ssh -oUserKnownHostsFile=$host_file -p $HOST_PORT -S none root@$host_ip socat UNIX-LISTEN:/mnt/keychain/keychain.sock,unlink-early,unlink-close,fork -\"" \
+            "exec:\"$0 keychain-lookup\"" &> /dev/null &
+    fi |& tee -a $PIDFILE
+
+    # here, we're just printing the SSH keys that have been forwarded
+    if [ "$opt_ssh" = "yes" ] || [ "$opt_gpg" = "yes" ]; then
+        if [ "$opt_ssh" = "yes" ]; then
+            echo "SSH keys forwarded:"
+            ssh \
+                -A \
+                -o UserKnownHostsFile=$host_file \
+                -p $HOST_PORT \
+                -S none \
+                root@$host_ip \
+                ssh-add -l
+            echo
+        fi
+
+        # this sets up both the ssh-agent forwarding (handled in ssh-entrypoint.sh) as well as the gpg-agent forwarding
+        # (handled via the reverse tunnel)
+        ssh \
+            $(test "$opt_ssh" = "yes" && echo "-Af" || echo "-fNT") \
+            $(test "$opt_gpg" = "yes" && echo "-R /mnt/gpg/S.gpg-agent:$HOME/.gnupg/S.gpg-agent.extra") \
+            -o UserKnownHostsFile=$host_file \
+            -o ExitOnForwardFailure=yes \
+            -p $HOST_PORT \
+            -S none \
+            root@$host_ip \
+            $(test "$opt_ssh" = "yes" && echo "/ssh-entrypoint.sh") \
+            &> /dev/null
+
+        # the remote gpg will only recognize keys for which it has the public key, so we import them to the remote gpg
+        # database
+        if [ "$opt_gpg" = "yes" ]; then
+            echo "GPG keys imported:"
+            gpg --with-colons -K | \
+                awk -F':' '/^sec/{print $5}' | \
+                xargs -n 1 gpg --export -a | \
+                ssh \
+                    -o UserKnownHostsFile=$host_file \
+                    -p $HOST_PORT \
+                    -S none \
+                    root@$host_ip \
+                    gpg --homedir /mnt/gpg --import
+
+            gpg --export-ownertrust | \
+                ssh \
+                    -o UserKnownHostsFile=$host_file \
+                    -p $HOST_PORT \
+                    -S none \
+                    root@$host_ip \
+                    gpg --homedir /mnt/gpg --import-ownertrust
+            echo
+        fi
+    fi |& tee -a $PIDFILE
+}
+
+function do_stop {
+    docker stop $CONTAINER_NAME &> /dev/null
+    rm $PIDFILE &> /dev/null
+}
+
+function do_mount {
+    echo -n "-v daft-ssh:/mnt/ssh "
+    echo -n "-e SSH_AUTH_SOCK=/mnt/ssh/ssh-agent.sock "
+    echo -n "-v daft-gpg:/root/.gnupg "
+    echo -n "-v daft-keychain:/keychain "
+}
+
+function do_status {
+    local status=$(docker container inspect -f '{{.State.Status}}' $CONTAINER_NAME)
+    local errcode=$?
+    cat $PIDFILE
+    echo "Container Status: $status"
+    [[ $errorcode -ne 0 ]] && exit 1
+}
+
+function do_keychain_lookup {
+    local key
+    local state="$(set +o); set -$-"
+    set +e
+    while read key; do
+        value=$( \
+            echo $key | \
+            grep -wFf <(echo $KEYCHAIN_ALLOWED | tr  ' ' '\n') | \
+            xargs -n 1 -r -- security find-generic-password -g -s $KEYCHAIN_SERVICE -a 2>&1 > /dev/null
+        )
+        if [ "$?" -eq 0 ]; then
+            value=$(echo $value | cut -d' ' -f2)
+            value="${value#\"}"
+            value="${value%\"}"
+        fi
+        echo "$value"
+    done
+    set +vx; eval "$state"
+}
+
+CMD=$(basename $0)
+CMD=${CMD##daft-}
+
+if [ "$CMD" = "daft" ]; then
+    if [ $# -lt 1 ]; then
+        usage
+        exit 1
+    fi
+    CMD=$1
+    shift
+fi
+
+HANDLER="do_$(echo $CMD | tr '-' '_')"
+if TYPE=$(type -t "$HANDLER") && [ "$TYPE" = "function" ]; then
+    $HANDLER "$@"
+else
+    echo Not a command: $CMD
+fi
