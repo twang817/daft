@@ -1,0 +1,10 @@
+AuthorizedKeysFile .ssh/authorized_keys
+Subsystem sftp /usr/lib/ssh/sftp-server
+
+UsePAM yes
+PubkeyAuthentication no
+PasswordAuthentication no
+StreamLocalBindUnlink yes
+
+Match Address 172.17.0.* User root
+    PubkeyAuthentication yes

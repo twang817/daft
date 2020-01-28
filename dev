@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+
+function release() {
+    set -e
+    bumpversion "$@"
+    git push origin HEAD --tags
+    hub release create -m v$(cat version) v$(cat version)
+}
+
+if TYPE=$(type -t "$1") && [ "$TYPE" = "function" ]; then
+    $@
+else
+    echo Not a command: $@
+    exit 1
+fi
