@@ -118,7 +118,7 @@ function do_start {
 
     local host_ip
     if [ "$DOCKER_HOST" ]; then
-        host_ip=$(echo $DOCKER_HOST | aws -F '//' '{print $2}' | awk -F ':' '{print $1}')
+        host_ip=$(echo $DOCKER_HOST | awk -F '//' '{print $2}' | awk -F ':' '{print $1}')
     else
         host_ip=127.0.0.1
     fi
