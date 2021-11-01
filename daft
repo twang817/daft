@@ -46,12 +46,6 @@ function _ensure_build {
     if ! docker image inspect $IMAGE_NAME:$IMAGE_TAG &> /dev/null; then
         do_build
     fi
-    local image_date=$(docker image inspect -f {{.Created}} $IMAGE_NAME:$IMAGE_TAG)
-    local image_date_ts=$(date -d "$image_date" +%s)
-    local compare_date_ts=$(date -d "now - 30 days" +%s)
-    if [ "$image_date_ts" -lt "$compare_date_ts" ]; then
-        echo "WARNING: daft image is old, consider a rebuild to ensure it still works"
-    fi
 }
 
 function do_build {
@@ -91,6 +85,7 @@ function do_start {
 
     local id=$(docker ps -qf name=$CONTAINER_NAME)
     if [ -n "$id" ]; then
+        echo "daft already running."
         return
     fi
 
@@ -109,9 +104,9 @@ function do_start {
         --name $CONTAINER_NAME \
         --rm \
         -d \
-        $(test "$opt_ssh" = "yes" && echo "-v daft-ssh:/mnt/ssh") \
-        $(test "$opt_gpg" = "yes" && echo "-v daft-gpg:/mnt/gpg") \
-        $(test "$opt_keychain" = "yes" && echo "-v daft-keychain:/mnt/keychain") \
+        $(test "$opt_ssh" = "yes" && echo "-v daft-ssh:/mnt/ssh -l ssh=yes" || echo "-l ssh=no") \
+        $(test "$opt_gpg" = "yes" && echo "-v daft-gpg:/mnt/gpg -l gpg=yes" || echo "-l gpg=no") \
+        $(test "$opt_keychain" = "yes" && echo "-v daft-keychain:/mnt/keychain -l keychain=yes" || echo "-l keychain=no") \
         -e AUTHORIZED_KEYS=$(ssh-add -L | base64 | tr -d '\n') \
         -p $HOST_PORT:22 \
         $IMAGE_NAME:$IMAGE_TAG > /dev/null
@@ -218,29 +213,9 @@ function do_stop {
 }
 
 function do_mount {
-    local opt_ssh=yes opt_gpg=yes opt_keychain=yes OPTIND
-    while getopts -- "-:" OPT; do
-        if [ "$OPT" = "-" ]; then
-            OPT="${OPTARG%%=*}"
-            OPTARG="${OPTARG#$OPT}"
-            OPTARG="${OPTARG#=}"
-        fi
-        case "$OPT" in
-            no-ssh) opt_ssh=no ;;
-            no-gpg) opt_gpg=no ;;
-            no-keychain) opt_keychain=no ;;
-            *) usage; exit 1 ;;
-        esac
-    done
-    shift $((OPTIND - 1))
-
-    if [ "$opt_ssh" = "no" ] &&
-       [ "$opt_gpg" = "no" ] &&
-       [ "$opt_keychain" = "no" ]; then
-        echo "Must enable one of ssh, gpg, or keychain"
-        exit 1
-    fi
-
+    opt_ssh=$(docker inspect --format "{{.Config.Labels.ssh}}" $CONTAINER_NAME)
+    opt_gpg=$(docker inspect --format "{{.Config.Labels.gpg}}" $CONTAINER_NAME)
+    opt_keychain=$(docker inspect --format "{{.Config.Labels.keychain}}" $CONTAINER_NAME)
     if [ "$opt_ssh" = "yes" ]; then
         echo -n "-v daft-ssh:/mnt/ssh "
         echo -n "-e SSH_AUTH_SOCK=/mnt/ssh/ssh-agent.sock "
