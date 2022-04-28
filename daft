@@ -152,7 +152,7 @@ function do_start {
             "exec:\"ssh -oUserKnownHostsFile=$host_file -p $HOST_PORT -S none root@$host_ip socat UNIX-LISTEN:/mnt/keychain/keychain.sock,unlink-early,unlink-close,fork -\"" \
             "exec:\"$0 keychain-lookup\"" &> /dev/null &
         echo
-    fi |& tee -a $PIDFILE
+    fi 2>&1 | tee -a $PIDFILE
 
     # here, we're just printing the SSH keys that have been forwarded
     if [ "$opt_ssh" = "yes" ] || [ "$opt_gpg" = "yes" ]; then
@@ -204,7 +204,7 @@ function do_start {
                     gpg --homedir /mnt/gpg --import-ownertrust
             echo
         fi
-    fi |& tee -a $PIDFILE
+    fi 2>&1 | tee -a $PIDFILE
 }
 
 function do_stop {
@@ -229,11 +229,16 @@ function do_mount {
 }
 
 function do_status {
-    local status=$(docker container inspect -f '{{.State.Status}}' $CONTAINER_NAME)
-    local errcode=$?
-    cat $PIDFILE
-    echo "Container Status: $status"
-    [[ $errorcode -ne 0 ]] && exit 1
+    set +eo pipefail
+    local status
+    status=$(docker container inspect -f '{{.State.Status}}' $CONTAINER_NAME 2> /dev/null)
+    if [[ $? -ne 0 ]]; then
+        echo "daft is not running"
+        exit 1
+    else
+        cat $PIDFILE
+        echo "Container Status: $status"
+    fi
 }
 
 function do_keychain_lookup {
