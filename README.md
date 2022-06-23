@@ -63,7 +63,7 @@ Obviously, you will need Docker.
 Install:
 ========
 ```
-git clone https://ghe.coxautoinc.com/ETS-CloudAutomation/daft.git
+git clone https://github.com/twang817/daft.git
 cd daft
 make
 ```
@@ -78,12 +78,12 @@ Forward GPG Agent:     yes
 Create Keychain Proxy: no
 
 SSH keys forwarded:
-4096 SHA256:FVzZkMjGAJTcp5yHo4RZP2INC5HPRgGANLIaPz6L0G8 Tommy.Wang@coxautoinc.com (RSA)
+4096 SHA256:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX user@example.com (RSA)
 
 GPG keys imported:
 gpg: keybox '/mnt/gpg/pubring.kbx' created
 gpg: /mnt/gpg/trustdb.gpg: trustdb created
-gpg: key 12C3B2A9C6D8061F: public key "Tommy Wang <Tommy.Wang@coxautoinc.com>" imported
+gpg: key XXXXXXXXXXXXXXXX: public key "User <user@example.com>" imported
 gpg: Total number processed: 1
 gpg:               imported: 1
 gpg: inserting ownertrust of 3
@@ -99,14 +99,14 @@ To use daft, you really just need to add `$(daft mount)` to your run options:
 
 ```
 $ docker run --rm $(daft mount) python:latest ssh-add -l
-4096 SHA256:FVzZkMjGAJTcp5yHo4RZP2INC5HPRgGANLIaPz6L0G8 Tommy.Wang@coxautoinc.com (RSA)
+4096 SHA256:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX user@example.com (RSA)
 
 $ docker run --rm $(daft mount) python:latest gpg -k
 /root/.gnupg/pubring.kbx
 ------------------------
 pub   rsa4096 2019-03-07 [C]
-      5A31993C027CD94C3F2A5E1012C3B2A9C6D8061F
-uid           [ultimate] Tommy Wang <Tommy.Wang@coxautoinc.com>
+      XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+uid           [ultimate] User <user@example.com>
 sub   rsa4096 2019-03-07 [E] [expires: 2020-03-06]
 sub   rsa4096 2019-03-07 [S] [expires: 2020-03-06]
 sub   rsa4096 2019-03-07 [A] [expires: 2020-03-06]
@@ -127,10 +127,10 @@ Keychain Service: myservice
 Keychain Account: myaccount
 
 SSH keys forwarded:
-4096 SHA256:FVzZkMjGAJTcp5yHo4RZP2INC5HPRgGANLIaPz6L0G8 Tommy.Wang@coxautoinc.com (RSA)
+4096 SHA256:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX user@example.com (RSA)
 
 GPG keys imported:
-gpg: key 12C3B2A9C6D8061F: "Tommy Wang <Tommy.Wang@coxautoinc.com>" not changed
+gpg: key XXXXXXXXXXXXXXXX: "User <user@example.com>" not changed
 gpg: Total number processed: 1
 gpg:              unchanged: 1
 
