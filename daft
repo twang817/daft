@@ -55,7 +55,7 @@ function do_build {
 }
 
 function do_start {
-    local opt_ssh=yes opt_gpg=yes opt_keychain=yes OPTIND
+    local opt_ssh=yes opt_gpg=yes opt_keychain=yes quiet=no OPTIND
 
     if [ -z "$KEYCHAIN_SERVICE" ] || [ -z "$KEYCHAIN_ALLOWED" ]; then
         opt_keychain=no
@@ -71,6 +71,7 @@ function do_start {
             no-ssh) opt_ssh=no ;;
             no-gpg) opt_gpg=no ;;
             no-keychain) opt_keychain=no ;;
+            quiet) quiet=yes ;;
             *) usage; exit 1 ;;
         esac
     done
@@ -87,7 +88,9 @@ function do_start {
 
     local id=$(docker ps -qf name=$CONTAINER_NAME)
     if [ -n "$id" ]; then
-        echo "daft already running."
+        if [ "$quiet" = "no" ]; then
+            echo "daft already running."
+        fi
         return
     fi
 
